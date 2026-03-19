@@ -166,15 +166,19 @@ else
   fi
 fi
 
-# TotalSegmentator (needs torch)
+# TotalSegmentator (needs torch -- primary multi-organ provider)
 provision_framework "seg_totalseg" "totalsegmentator" \
   "TotalSegmentator>=2.0.0" "torch>=2.0.0" "SimpleITK>=2.0.0" "nibabel>=4.0.0"
 
-# nnU-Net v2 (needs torch)
+# LungMask (lightweight lung/lobe segmentation)
+provision_framework "seg_lungmask" "lungmask" \
+  "lungmask>=0.2.0" "torch>=2.0.0" "SimpleITK>=2.0.0" "nibabel>=4.0.0"
+
+# nnU-Net v2 (generic framework for site-trained models)
 provision_framework "seg_nnunetv2" "nnunetv2" \
   "nnunetv2>=2.0.0" "torch>=2.0.0" "SimpleITK>=2.0.0" "nibabel>=4.0.0"
 
-# MONAI (needs torch)
+# MONAI (bundle-based inference)
 provision_framework "seg_monai" "monai" \
   "monai>=1.3.0" "torch>=2.0.0" "SimpleITK>=2.0.0" "nibabel>=4.0.0" "pyyaml>=5.0"
 

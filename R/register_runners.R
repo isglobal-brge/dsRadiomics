@@ -58,6 +58,23 @@
                         "image_asset", "provider")
   ))
 
+  # LungMask runner
+  .write_runner_yaml(runners_dir, "lungmask_infer", list(
+    name = "lungmask_infer",
+    plane = "artifact",
+    resource_class = "cpu_heavy",
+    command = "python",
+    python = file.path(venv_root, "seg_lungmask", "bin", "python"),
+    args_template = list(
+      file.path(scripts_dir, "dsradiomics_seg_lungmask.py"),
+      "--input", "{input_dir}",
+      "--output", "{output_dir}",
+      "--model", "{model_name}"
+    ),
+    timeout_secs = 3600L,
+    allowed_params = c("model_name", "image_asset", "provider")
+  ))
+
   # nnU-Net v2 runner
   .write_runner_yaml(runners_dir, "nnunetv2_predict", list(
     name = "nnunetv2_predict",

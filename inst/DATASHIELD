@@ -1,2 +1,4 @@
 AggregateMethods:
-  radiomicsCapabilitiesDS
+  radiomicsCapabilitiesDS,
+  radiomicsInstallModelDS,
+  radiomicsListModelsDS
