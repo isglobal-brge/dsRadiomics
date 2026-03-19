@@ -1,8 +1,0 @@
-{
-  "python_version": "3.10.12",
-  "libraries": {
-    "numpy": "1.24.3",
-    "SimpleITK": "2.3.1",
-    "lungmask": "0.2.20"
-  }
-}

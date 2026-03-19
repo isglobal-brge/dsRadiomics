@@ -1,7 +1,0 @@
-{
-  "apt_packages": [
-    "libffi-dev",
-    "libgomp1",
-    "libglib2.0-0"
-  ]
-} 
