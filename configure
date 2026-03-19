@@ -1,0 +1,198 @@
+#!/bin/sh
+# dsRadiomics post-install configuration script
+# Runs automatically during R CMD INSTALL on Unix systems.
+#
+# Creates Python virtual environments for radiomics extraction and
+# segmentation frameworks. Only installs frameworks (lightweight).
+# Model weights are NOT downloaded here -- use admin commands for that.
+#
+# Requires: python3 (already in Rock/DataSHIELD base image)
+# Installs: uv (if not present) + framework deps per env
+
+set -e
+
+VENV_ROOT="${DSRADIOMICS_VENV_ROOT:-/var/lib/dsradiomics/venvs}"
+PYTHON="${PYTHON3:-$(command -v python3 2>/dev/null || true)}"
+LOG_PREFIX="[dsRadiomics configure]"
+
+log_info() { echo "${LOG_PREFIX} $*"; }
+log_warn() { echo "${LOG_PREFIX} WARNING: $*" >&2; }
+
+check_import() { "$1" -c "import $2" 2>/dev/null; }
+
+# Pre-checks
+if [ -z "${PYTHON}" ] || [ ! -x "${PYTHON}" ]; then
+  log_warn "python3 not found. Skipping Python environment setup."
+  exit 0
+fi
+
+PYTHON_VERSION=$("${PYTHON}" --version 2>&1 | head -1)
+log_info "Python: ${PYTHON} (${PYTHON_VERSION})"
+
+if ! "${PYTHON}" -m venv --help >/dev/null 2>&1; then
+  log_warn "python3-venv not available. Skipping."
+  exit 0
+fi
+
+mkdir -p "${VENV_ROOT}" 2>/dev/null || {
+  log_warn "Cannot create ${VENV_ROOT}. Skipping."
+  exit 0
+}
+
+log_info "Venv root: ${VENV_ROOT}"
+
+# Install uv
+UV="$(command -v uv 2>/dev/null || true)"
+if [ -z "${UV}" ]; then
+  log_info "Installing uv..."
+  if "${PYTHON}" -m pip install --break-system-packages -q uv 2>/dev/null || \
+     "${PYTHON}" -m pip install -q uv 2>/dev/null; then
+    UV="$(command -v uv 2>/dev/null || true)"
+    [ -n "${UV}" ] && log_info "uv installed: $(${UV} --version)"
+  fi
+fi
+
+USE_UV=true
+[ -z "${UV}" ] && { log_warn "uv not available, using pip."; USE_UV=false; }
+
+# Installer functions
+create_venv() {
+  local name="$1"
+  local venv_path="${VENV_ROOT}/${name}"
+  if [ -d "${venv_path}" ] && [ -f "${venv_path}/.dsradiomics_ready" ]; then
+    log_info "  ${name}: already provisioned."
+    return 0
+  fi
+  log_info "  ${name}: creating venv..."
+  rm -rf "${venv_path}"
+  if [ "${USE_UV}" = true ]; then
+    "${UV}" venv --python "${PYTHON}" --seed "${venv_path}" >/dev/null 2>&1
+  else
+    "${PYTHON}" -m venv --system-site-packages "${venv_path}"
+  fi
+}
+
+install_deps() {
+  local name="$1"; shift
+  local venv_path="${VENV_ROOT}/${name}"
+  local venv_python="${venv_path}/bin/python"
+  log_info "  ${name}: installing $*"
+  if [ "${USE_UV}" = true ]; then
+    "${UV}" pip install --python "${venv_python}" --quiet "$@" 2>&1 | tail -5
+  else
+    "${venv_path}/bin/pip" install --quiet --no-cache-dir "$@" 2>&1 | tail -5
+  fi
+}
+
+mark_ready() {
+  echo "$2" > "${VENV_ROOT}/$1/.dsradiomics_ready"
+}
+
+provision_framework() {
+  local name="$1"; local check_module="$2"; shift 2; local deps="$*"
+  local venv_path="${VENV_ROOT}/${name}"
+
+  if [ -f "${venv_path}/.dsradiomics_ready" ]; then
+    if check_import "${venv_path}/bin/python" "${check_module}" 2>/dev/null; then
+      log_info "  ${name}: OK (cached)"
+      return 0
+    fi
+    log_info "  ${name}: cached but unhealthy, rebuilding..."
+  fi
+
+  if check_import "${PYTHON}" "${check_module}" 2>/dev/null; then
+    log_info "  ${name}: system Python has ${check_module}, skipping venv."
+    return 0
+  fi
+
+  create_venv "${name}" || { log_warn "  ${name}: venv failed."; return 0; }
+
+  # shellcheck disable=SC2086
+  install_deps "${name}" "numpy>=1.21.0" "pandas>=1.3.0" ${deps} || {
+    log_warn "  ${name}: install failed."
+    rm -rf "${venv_path}"
+    return 0
+  }
+
+  if check_import "${venv_path}/bin/python" "${check_module}"; then
+    dep_hash=$(echo "${deps}" | sha256sum 2>/dev/null | cut -d' ' -f1 || echo "unknown")
+    mark_ready "${name}" "${dep_hash}"
+    log_info "  ${name}: ready."
+  else
+    log_warn "  ${name}: import ${check_module} failed."
+    rm -rf "${venv_path}"
+  fi
+}
+
+# Provision environments
+log_info "Provisioning Python environments for radiomics/segmentation..."
+log_info "(Installs frameworks only. Model weights installed separately by admin.)"
+echo ""
+
+# PyRadiomics requires C compilation (cmatrices extension)
+# Install build deps if needed, then install from git for Python 3.12+ compat
+log_info "  radiomics: preparing build environment..."
+apt-get update -qq 2>/dev/null && apt-get install -y -qq build-essential python3-dev git 2>/dev/null || true
+
+RADIOMICS_VENV="${VENV_ROOT}/radiomics"
+if [ -f "${RADIOMICS_VENV}/.dsradiomics_ready" ] && check_import "${RADIOMICS_VENV}/bin/python" "radiomics" 2>/dev/null; then
+  log_info "  radiomics: OK (cached)"
+else
+  if check_import "${PYTHON}" "radiomics" 2>/dev/null; then
+    log_info "  radiomics: system Python has radiomics, skipping venv."
+  else
+    create_venv "radiomics" || { log_warn "  radiomics: venv failed."; }
+    if [ -d "${RADIOMICS_VENV}" ]; then
+      install_deps "radiomics" "numpy" "setuptools" "setuptools-scm" "wheel" "scikit-build-core" "cmake"
+      # Install pyradiomics from git (Python 3.12+ compatible)
+      log_info "  radiomics: installing pyradiomics from source..."
+      if [ "${USE_UV}" = true ]; then
+        "${UV}" pip install --python "${RADIOMICS_VENV}/bin/python" --no-build-isolation \
+          "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git" \
+          SimpleITK pandas pyyaml 2>&1 | tail -3
+      else
+        "${RADIOMICS_VENV}/bin/pip" install --no-build-isolation \
+          "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git" \
+          SimpleITK pandas pyyaml 2>&1 | tail -3
+      fi
+      if check_import "${RADIOMICS_VENV}/bin/python" "radiomics" 2>/dev/null; then
+        echo "ready" > "${RADIOMICS_VENV}/.dsradiomics_ready"
+        log_info "  radiomics: ready."
+      else
+        log_warn "  radiomics: install failed."
+        rm -rf "${RADIOMICS_VENV}"
+      fi
+    fi
+  fi
+fi
+
+# TotalSegmentator (needs torch)
+provision_framework "seg_totalseg" "totalsegmentator" \
+  "TotalSegmentator>=2.0.0" "torch>=2.0.0" "SimpleITK>=2.0.0" "nibabel>=4.0.0"
+
+# nnU-Net v2 (needs torch)
+provision_framework "seg_nnunetv2" "nnunetv2" \
+  "nnunetv2>=2.0.0" "torch>=2.0.0" "SimpleITK>=2.0.0" "nibabel>=4.0.0"
+
+# MONAI (needs torch)
+provision_framework "seg_monai" "monai" \
+  "monai>=1.3.0" "torch>=2.0.0" "SimpleITK>=2.0.0" "nibabel>=4.0.0" "pyyaml>=5.0"
+
+echo ""
+log_info "Python environment setup complete."
+log_info "Venvs in: ${VENV_ROOT}"
+log_info ""
+log_info "NOTE: Model weights are NOT installed automatically."
+log_info "Use admin commands to install models:"
+log_info "  dsRadiomics::register_segmentation_model(...)"
+log_info ""
+
+for fw in radiomics seg_totalseg seg_nnunetv2 seg_monai; do
+  venv="${VENV_ROOT}/${fw}"
+  if [ -f "${venv}/.dsradiomics_ready" ]; then
+    size=$(du -sh "${venv}" 2>/dev/null | cut -f1)
+    log_info "  ${fw}: ${size}"
+  fi
+done
+
+exit 0

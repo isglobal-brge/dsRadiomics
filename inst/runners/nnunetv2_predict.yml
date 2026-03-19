@@ -1,0 +1,9 @@
+name: nnunetv2_predict
+plane: artifact
+resource_class: gpu_optional
+framework: seg_nnunetv2
+command: python
+args_template: ["-m", "dsradiomics_seg_nnunet", "--input", "{input_dir}", "--output", "{output_dir}", "--model", "{model_name}"]
+timeout_secs: 7200
+allowed_params: [model_name, fold, checkpoint, step_size]
+python_deps: ["nnunetv2>=2.0.0", "torch>=2.0.0"]

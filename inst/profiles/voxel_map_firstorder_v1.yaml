@@ -1,0 +1,15 @@
+setting:
+  binWidth: 25
+  normalize: true
+  normalizeScale: 1
+  force2D: false
+  label: 1
+  geometryTolerance: 1e-6
+  voxelBased: true
+  kernelRadius: 2
+
+featureClass:
+  firstorder:
+
+imageType:
+  Original:

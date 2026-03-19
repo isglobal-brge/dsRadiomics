@@ -1,0 +1,9 @@
+name: pyradiomics_extract
+plane: artifact
+resource_class: cpu_heavy
+framework: radiomics
+command: python
+args_template: ["-m", "dsradiomics_extract", "--input", "{input_dir}", "--output", "{output_dir}", "--settings", "{settings_file}"]
+timeout_secs: 3600
+allowed_params: [settings_file, mask_asset, label_channel, force2D, voxel_based]
+python_deps: ["pyradiomics>=3.0.0", "SimpleITK>=2.0.0", "pandas>=1.3.0"]

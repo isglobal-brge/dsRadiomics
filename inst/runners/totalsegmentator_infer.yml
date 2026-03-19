@@ -1,0 +1,9 @@
+name: totalsegmentator_infer
+plane: artifact
+resource_class: gpu_optional
+framework: seg_totalseg
+command: python
+args_template: ["-m", "dsradiomics_seg_totalseg", "--input", "{input_dir}", "--output", "{output_dir}", "--task", "{task}"]
+timeout_secs: 7200
+allowed_params: [task, fast, roi_subset, statistics]
+python_deps: ["TotalSegmentator>=2.0.0", "torch>=2.0.0"]

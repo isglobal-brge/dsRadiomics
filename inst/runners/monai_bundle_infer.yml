@@ -1,0 +1,9 @@
+name: monai_bundle_infer
+plane: artifact
+resource_class: gpu_optional
+framework: seg_monai
+command: python
+args_template: ["-m", "dsradiomics_seg_monai", "--input", "{input_dir}", "--output", "{output_dir}", "--bundle", "{bundle_name}"]
+timeout_secs: 7200
+allowed_params: [bundle_name, bundle_path, device]
+python_deps: ["monai>=1.3.0", "torch>=2.0.0"]

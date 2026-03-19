@@ -1,0 +1,31 @@
+Package: dsRadiomics
+Type: Package
+Title: DataSHIELD Radiomics Feature Extraction and Segmentation
+Version: 0.1.0
+Authors@R: c(
+    person("David", "Sarrat González", role = c("aut", "cre"), email = "david.sarrat@isglobal.org"),
+    person("Juan R", "González", role = "aut", email = "juanr.gonzalez@isglobal.org"))
+Description: Server-side DataSHIELD package for radiomics feature extraction
+    and image segmentation. Provides allowlisted artifact runners for
+    PyRadiomics, TotalSegmentator, nnU-Net v2, and MONAI bundles. Manages
+    segmentation model registry, radiomics profiles, and publishes derived
+    assets (feature tables, mask roots) into the dsImaging asset catalog.
+    Built on top of dsJobs for durable execution and dsImaging for asset
+    management.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Depends:
+    R (>= 4.1.0)
+Imports:
+    jsonlite,
+    digest,
+    processx,
+    utils
+Suggests:
+    dsJobs,
+    dsImaging,
+    yaml,
+    testthat (>= 3.0.0),
+    withr
+Config/testthat/edition: 3
+RoxygenNote: 7.3.3
