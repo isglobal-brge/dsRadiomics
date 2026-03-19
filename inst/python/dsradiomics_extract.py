@@ -1,115 +1,53 @@
 #!/usr/bin/env python3
 """dsRadiomics feature extraction runner.
 
-Called by dsJobs artifact runner with:
-  python -m dsradiomics_extract --input <dir> --output <dir> --settings <file>
-
-Input dir must contain:
-  - images/ (directory with image files)
-  - masks/ (directory with mask files, matched by filename)
-  OR
-  - manifest.json with image_path, mask_path per sample
-
-Output dir receives:
-  - radiomics.parquet (feature table)
-  - radiomics.csv (fallback)
-  - extraction_summary.json
+Reads the dsImaging registry to find image/mask roots for the dataset.
+Falls back to matching files in the input directory.
 """
 
 import argparse
 import json
 import os
 import sys
-import traceback
 
-def find_matched_pairs(input_dir):
-    """Find image-mask pairs from input directory."""
+
+def find_pairs_from_roots(image_root, mask_root):
+    """Match image-mask pairs by filename."""
+    if not os.path.isdir(image_root) or not os.path.isdir(mask_root):
+        return []
+    images = {os.path.splitext(f)[0]: os.path.join(image_root, f) for f in os.listdir(image_root)}
     pairs = []
-
-    # Check for manifest
-    manifest_path = os.path.join(input_dir, "manifest.json")
-    if os.path.exists(manifest_path):
-        with open(manifest_path) as f:
-            manifest = json.load(f)
-        if "samples" in manifest:
-            for s in manifest["samples"]:
-                pairs.append((s["image_path"], s["mask_path"], s.get("sample_id", os.path.basename(s["image_path"]))))
-            return pairs
-
-    # Auto-match by filename
-    images_dir = os.path.join(input_dir, "images")
-    masks_dir = os.path.join(input_dir, "masks")
-
-    if not os.path.isdir(images_dir):
-        # Single image/mask pair (test mode)
-        for f in os.listdir(input_dir):
-            if "image" in f.lower():
-                img = os.path.join(input_dir, f)
-                for m in os.listdir(input_dir):
-                    if "label" in m.lower() or "mask" in m.lower():
-                        mask = os.path.join(input_dir, m)
-                        pairs.append((img, mask, os.path.splitext(f)[0]))
-                        break
-        return pairs
-
-    image_files = {os.path.splitext(f)[0]: os.path.join(images_dir, f)
-                   for f in os.listdir(images_dir)}
-    mask_files = {os.path.splitext(f)[0]: os.path.join(masks_dir, f)
-                  for f in os.listdir(masks_dir)}
-
-    for name in sorted(set(image_files) & set(mask_files)):
-        pairs.append((image_files[name], mask_files[name], name))
-
-    return pairs
+    for f in os.listdir(mask_root):
+        name = os.path.splitext(f)[0]
+        if name in images:
+            pairs.append((images[name], os.path.join(mask_root, f), name))
+    return sorted(pairs, key=lambda x: x[2])
 
 
-def extract_features(pairs, settings_path=None):
-    """Run PyRadiomics on all pairs."""
-    from radiomics import featureextractor
-
-    if settings_path and os.path.exists(settings_path):
-        extractor = featureextractor.RadiomicsFeatureExtractor(settings_path)
-    else:
-        extractor = featureextractor.RadiomicsFeatureExtractor()
-
-    results = []
-    for image_path, mask_path, sample_id in pairs:
-        try:
-            result = extractor.execute(image_path, mask_path)
-            features = {k: float(v) for k, v in result.items()
-                       if not k.startswith("diagnostics")}
-            features["sample_id"] = sample_id
-            results.append(features)
-        except Exception as e:
-            print(f"  FAILED {sample_id}: {e}", file=sys.stderr)
-
-    return results
-
-
-def save_results(results, output_dir):
-    """Save as Parquet (preferred) or CSV."""
-    import pandas as pd
-    df = pd.DataFrame(results)
-
-    os.makedirs(output_dir, exist_ok=True)
+def find_dataset_roots(dataset_id=None):
+    """Read dsImaging registry to find image/mask roots."""
+    registry_path = "/var/lib/dsimaging/registry.yaml"
+    if not os.path.exists(registry_path):
+        return None, None
 
     try:
-        df.to_parquet(os.path.join(output_dir, "radiomics.parquet"), index=False)
-        fmt = "parquet"
-    except Exception:
-        df.to_csv(os.path.join(output_dir, "radiomics.csv"), index=False)
-        fmt = "csv"
-
-    summary = {
-        "n_samples": len(results),
-        "n_features": len(df.columns) - 1,  # minus sample_id
-        "format": fmt,
-        "columns": list(df.columns)
-    }
-    with open(os.path.join(output_dir, "extraction_summary.json"), "w") as f:
-        json.dump(summary, f, indent=2)
-
-    return summary
+        import yaml
+        registry = yaml.safe_load(open(registry_path))
+        for ds_id, entry in registry.items():
+            if dataset_id and ds_id != dataset_id:
+                continue
+            manifest_path = entry.get("manifest", "")
+            if not os.path.exists(manifest_path):
+                continue
+            manifest = yaml.safe_load(open(manifest_path))
+            assets = manifest.get("assets", {})
+            image_root = assets.get("images", {}).get("root")
+            mask_root = assets.get("masks", {}).get("root")
+            if image_root and mask_root:
+                return image_root, mask_root
+    except Exception as e:
+        print(f"  Warning: registry read failed: {e}")
+    return None, None
 
 
 def main():
@@ -119,27 +57,69 @@ def main():
     parser.add_argument("--settings", default=None)
     args = parser.parse_args()
 
-    print(f"dsRadiomics extraction")
-    print(f"  Input: {args.input}")
-    print(f"  Output: {args.output}")
-    print(f"  Settings: {args.settings or 'default'}")
+    print("dsRadiomics extraction")
 
-    pairs = find_matched_pairs(args.input)
+    # Find image/mask roots from dsImaging registry
+    dataset_id = os.environ.get("DSJOBS_CFG_DATASET_ID", "")
+    image_root, mask_root = find_dataset_roots(dataset_id or None)
+
+    if image_root and mask_root:
+        print(f"  Image root: {image_root}")
+        print(f"  Mask root: {mask_root}")
+        pairs = find_pairs_from_roots(image_root, mask_root)
+    else:
+        # Fallback: look for *image*/*label* in input dir
+        pairs = []
+        for f in os.listdir(args.input):
+            if "image" in f.lower():
+                for m in os.listdir(args.input):
+                    if "label" in m.lower() or "mask" in m.lower():
+                        pairs.append((os.path.join(args.input, f), os.path.join(args.input, m), os.path.splitext(f)[0]))
+                        break
+
     print(f"  Found {len(pairs)} image-mask pairs")
-
     if not pairs:
         print("ERROR: No image-mask pairs found", file=sys.stderr)
         sys.exit(1)
 
-    results = extract_features(pairs, args.settings)
-    print(f"  Extracted features from {len(results)}/{len(pairs)} samples")
+    from radiomics import featureextractor
+    import pandas as pd
+
+    if args.settings and args.settings != "default" and os.path.exists(args.settings):
+        extractor = featureextractor.RadiomicsFeatureExtractor(args.settings)
+    else:
+        extractor = featureextractor.RadiomicsFeatureExtractor()
+
+    results = []
+    for img, mask, sid in pairs:
+        try:
+            print(f"  Extracting: {sid}")
+            result = extractor.execute(img, mask)
+            features = {k: float(v) for k, v in result.items() if not k.startswith("diagnostics")}
+            features["sample_id"] = sid
+            results.append(features)
+        except Exception as e:
+            print(f"  FAILED {sid}: {e}", file=sys.stderr)
 
     if not results:
         print("ERROR: No features extracted", file=sys.stderr)
         sys.exit(1)
 
-    summary = save_results(results, args.output)
-    print(f"  Saved: {summary['n_samples']} samples x {summary['n_features']} features ({summary['format']})")
+    df = pd.DataFrame(results)
+    os.makedirs(args.output, exist_ok=True)
+    try:
+        df.to_parquet(os.path.join(args.output, "radiomics.parquet"), index=False)
+        fmt = "parquet"
+    except Exception:
+        df.to_csv(os.path.join(args.output, "radiomics.csv"), index=False)
+        fmt = "csv"
+
+    summary = {"n_samples": len(results), "n_features": len(df.columns)-1,
+               "format": fmt, "columns": list(df.columns)}
+    with open(os.path.join(args.output, "extraction_summary.json"), "w") as f:
+        json.dump(summary, f, indent=2)
+
+    print(f"  Saved: {summary['n_samples']} samples x {summary['n_features']} features ({fmt})")
 
 
 if __name__ == "__main__":
