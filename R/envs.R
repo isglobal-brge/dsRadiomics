@@ -1,5 +1,4 @@
 # Module: Python Environment Provisioning
-# Mirrors dsFlower pattern: uv-based venv creation per framework.
 
 .RADIOMICS_PYTHON_DEPS <- list(
   radiomics = c("pyradiomics>=3.0.0", "SimpleITK>=2.0.0", "pandas>=1.3.0",
@@ -18,29 +17,6 @@
   seg_nnunetv2 = "nnunetv2",
   seg_monai = "monai"
 )
-
-#' Ensure a Python environment for a radiomics/segmentation framework
-#'
-#' Reuses dsFlower's .ensure_python_env if available, otherwise creates
-#' its own venv under dsradiomics.venv_root.
-#'
-#' @param framework Character; framework name.
-#' @return Named list with python path.
-#' @keywords internal
-.ensure_radiomics_env <- function(framework) {
-  # Try dsFlower's env system first
-  if (requireNamespace("dsFlower", quietly = TRUE)) {
-    tryCatch({
-      env <- dsFlower:::.ensure_python_env(framework)
-      return(env)
-    }, error = function(e) NULL)
-  }
-
-  # Standalone: use system python
-  python <- Sys.which("python3")
-  if (!nzchar(python)) python <- "python3"
-  list(python = python, source = "system")
-}
 
 #' List available radiomics environments
 #' @export
