@@ -493,39 +493,33 @@ radiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_enc,
   })
 }
 
-#' Resolve image root from dsImaging registry for a dataset
+#' Resolve dataset and return full resolved context
+#' @keywords internal
+.resolve_ds <- function(dataset_id) {
+  tryCatch(dsImaging::resolve_dataset(dataset_id), error = function(e) NULL)
+}
+
+#' Resolve image root URI from manifest
 #' @keywords internal
 .resolve_image_root <- function(dataset_id) {
+  resolved <- .resolve_ds(dataset_id)
+  if (is.null(resolved)) return(NULL)
   tryCatch({
-    reg_path <- getOption("dsimaging.registry_path",
-      getOption("default.dsimaging.registry_path",
-                "/var/lib/dsimaging/registry.yaml"))
-    if (!file.exists(reg_path)) return(NULL)
-    reg <- yaml::yaml.load_file(reg_path)
-    entry <- reg[[dataset_id]]
-    if (is.null(entry)) return(NULL)
-    manifest <- yaml::yaml.load_file(entry$manifest)
-    manifest$assets$images$root
+    manifest <- dsImaging::parse_manifest(resolved$manifest_uri, resolved$backend)
+    manifest$assets$images$uri
   }, error = function(e) NULL)
 }
 
-#' Resolve mask root when using existing masks
+#' Resolve mask root URI when using existing masks
 #' @keywords internal
 .resolve_mask_root <- function(dataset_id, segmenter) {
   if (!identical(segmenter$provider, "existing_mask_asset")) return(NULL)
+  resolved <- .resolve_ds(dataset_id)
+  if (is.null(resolved)) return(NULL)
   tryCatch({
-    reg_path <- getOption("dsimaging.registry_path",
-      getOption("default.dsimaging.registry_path",
-                "/var/lib/dsimaging/registry.yaml"))
-    if (!file.exists(reg_path)) return(NULL)
-    reg <- yaml::yaml.load_file(reg_path)
-    entry <- reg[[dataset_id]]
-    if (is.null(entry)) return(NULL)
-    manifest <- yaml::yaml.load_file(entry$manifest)
+    manifest <- dsImaging::parse_manifest(resolved$manifest_uri, resolved$backend)
     mask_alias <- segmenter$mask_asset %||% "masks"
-    root <- manifest$assets[[mask_alias]]$root
-    if (!is.null(root) && dir.exists(root)) return(root)
-    NULL
+    manifest$assets[[mask_alias]]$uri
   }, error = function(e) NULL)
 }
 
