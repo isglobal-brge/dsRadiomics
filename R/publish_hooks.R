@@ -82,37 +82,27 @@
       artifact_relpath <- file.path(output_dir, artifact_relpath)
   }
 
-  # 1. Record completion in generation
-  dsImaging::record_item_status(
+  # Single atomic transaction: item status + counter + asset registration
+  asset_reg <- NULL
+  if (!is.null(spec_hash) && !is.null(artifact_relpath)) {
+    asset_reg <- list(
+      dataset_id = dataset_id,
+      kind = "per_image_result",
+      path_or_root = artifact_relpath,
+      derivation_hash = spec_hash,
+      provenance = list(type = "per_image", job_id = job_id,
+                         generation_id = generation_id, sample_id = sample_id),
+      created_by_job = job_id
+    )
+  }
+
+  dsImaging::complete_item_atomic(
     generation_id = generation_id,
     sample_id = sample_id,
     status = "completed",
-    artifact_relpath = artifact_relpath
+    artifact_relpath = artifact_relpath,
+    register_asset = asset_reg
   )
-
-  # 2. Atomically increment completed_n
-  dsImaging::increment_generation_counter(generation_id, "completed_n")
-
-  # 3. Register as individual asset for cross-user dedup
-  if (!is.null(spec_hash) && !is.null(artifact_relpath)) {
-    tryCatch(
-      dsImaging::register_derived_asset(
-        dataset_id = dataset_id,
-        kind = "per_image_result",
-        path_or_root = artifact_relpath,
-        derivation_hash = spec_hash,
-        provenance = list(
-          type = "per_image",
-          job_id = job_id,
-          generation_id = generation_id,
-          sample_id = sample_id
-        ),
-        created_by_job = job_id,
-        description = paste0("Per-image result: ", sample_id)
-      ),
-      error = function(e) NULL
-    )
-  }
 
   # 4. Server-side drip feed: auto-submit next batch of pending images
   tryCatch(
@@ -140,10 +130,6 @@
   gen <- dsImaging::get_generation(generation_id)
   if (is.null(gen) || !gen$state %in% c("RUNNING", "PENDING")) return(invisible(NULL))
 
-  # Get pending items that haven't been submitted to dsJobs yet
-  pending_items <- dsImaging::get_generation_items(generation_id, status = "pending")
-  if (nrow(pending_items) == 0) return(invisible(NULL))
-
   # Check how many per-image jobs for this generation are currently active
   dsjobs_db <- dsJobs:::.db_connect()
   on.exit(dsJobs:::.db_close(dsjobs_db), add = TRUE)
@@ -152,19 +138,20 @@
      WHERE state IN ('PENDING','RUNNING') AND tags LIKE ?",
     params = list(paste0("%", generation_id, "%")))$n
 
-  # Only submit if we have capacity (keep max ~30 in-flight per generation)
-  max_inflight <- as.integer(
-    getOption("dsradiomics.max_inflight", 30L))
+  max_inflight <- as.integer(getOption("dsradiomics.max_inflight", 30L))
   if (active_n >= max_inflight) return(invisible(NULL))
 
-  # How many to submit this round
+  # Atomically claim pending items -- prevents duplicate submissions
+  # when multiple publisher hooks fire concurrently
   batch_size <- min(
     as.integer(getOption("dsradiomics.batch_size", 10L)),
-    max_inflight - active_n,
-    nrow(pending_items))
+    max_inflight - active_n)
   if (batch_size <= 0) return(invisible(NULL))
 
-  batch_ids <- pending_items$sample_id[seq_len(batch_size)]
+  batch_ids <- dsImaging::claim_pending_items(
+    generation_id, batch_size,
+    claimer_id = paste0("drip_", Sys.getpid()))
+  if (length(batch_ids) == 0) return(invisible(NULL))
 
   # Read the generation spec to reconstruct submission params
   spec <- tryCatch(
@@ -214,17 +201,15 @@
     # Cross-user dedup
     existing <- dsImaging::find_asset_by_hash(dataset_id, spec_hash)
     if (!is.null(existing)) {
-      dsImaging::record_item_status(generation_id, sid, "completed",
+      dsImaging::complete_item_atomic(generation_id, sid, "completed",
         artifact_relpath = existing)
-      dsImaging::increment_generation_counter(generation_id, "completed_n")
       next
     }
 
     image_path <- .resolve_sample_image(image_root, sid)
     if (is.null(image_path)) {
-      dsImaging::record_item_status(generation_id, sid, "failed",
+      dsImaging::complete_item_atomic(generation_id, sid, "failed",
         error = "Image file not found")
-      dsImaging::increment_generation_counter(generation_id, "failed_n")
       next
     }
 
@@ -276,9 +261,8 @@
         jsonlite::toJSON(job_spec, auto_unbox = TRUE, null = "null"))))
       dsJobs::jobSubmitDS(spec_enc)
     }, error = function(e) {
-      dsImaging::record_item_status(generation_id, sid, "failed",
+      dsImaging::complete_item_atomic(generation_id, sid, "failed",
         error = paste("Drip-feed submit failed:", conditionMessage(e)))
-      dsImaging::increment_generation_counter(generation_id, "failed_n")
     })
   }
 

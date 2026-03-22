@@ -83,6 +83,25 @@ def main():
                "n_failed": sum(1 for r in results if r["status"] == "failed"), "task": args.task}
     with open(os.path.join(args.output, "segmentation_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
+
+    # Write seg_manifest.json (explicit contract with extraction step)
+    seg_manifest = {"provider": "totalsegmentator", "task": args.task, "samples": {}}
+    for r in results:
+        sid = r["sample_id"]
+        out_dir = os.path.join(args.output, sid)
+        if r["status"] == "done" and os.path.isdir(out_dir):
+            masks = sorted(f for f in os.listdir(out_dir)
+                          if f.endswith((".nii.gz", ".nii")))
+            seg_manifest["samples"][sid] = {
+                "sample_id": sid,
+                "mask_dir": out_dir,
+                "mask_files": [os.path.join(out_dir, m) for m in masks],
+                "primary_mask": os.path.join(out_dir, masks[0]) if masks else None,
+                "status": "done"
+            }
+    with open(os.path.join(args.output, "seg_manifest.json"), "w") as f:
+        json.dump(seg_manifest, f, indent=2)
+
     print(f"  Done: {summary['n_done']}/{summary['n_total']} ({summary['n_failed']} failed)")
 
 

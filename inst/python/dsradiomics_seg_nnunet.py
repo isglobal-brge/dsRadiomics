@@ -84,6 +84,19 @@ def main():
     summary = {"n_total": len(images), "model": args.model}
     with open(os.path.join(args.output, "segmentation_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
+
+    # Write seg_manifest.json
+    seg_manifest = {"provider": "nnunetv2", "model": args.model, "samples": {}}
+    for img_path, sid in images:
+        mask_path = os.path.join(args.output, f"{sid}.nii.gz")
+        if os.path.exists(mask_path):
+            seg_manifest["samples"][sid] = {
+                "sample_id": sid, "primary_mask": mask_path,
+                "mask_files": [mask_path], "status": "done"
+            }
+    with open(os.path.join(args.output, "seg_manifest.json"), "w") as f:
+        json.dump(seg_manifest, f, indent=2)
+
     print(f"  Done: {len(images)} images processed")
 
 

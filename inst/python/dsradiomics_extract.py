@@ -61,6 +61,29 @@ def find_dataset_roots(dataset_id=None):
     return None, None
 
 
+def _find_mask_from_manifest(input_dir, sample_id):
+    """Read seg_manifest.json and return primary_mask for the sample.
+
+    This is the canonical path for production. The manifest is written
+    by the segmentation step and provides an explicit, unambiguous
+    mapping from sample_id to mask file(s).
+    """
+    manifest_path = os.path.join(input_dir, "seg_manifest.json")
+    if not os.path.exists(manifest_path):
+        return None
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        sample_entry = manifest.get("samples", {}).get(sample_id)
+        if sample_entry and sample_entry.get("primary_mask"):
+            mask = sample_entry["primary_mask"]
+            if os.path.exists(mask):
+                return mask
+    except Exception as e:
+        print(f"  Warning: seg_manifest.json read failed: {e}", file=sys.stderr)
+    return None
+
+
 def _find_mask_for_sample(input_dir, sample_id):
     """Find mask file for a sample in the input directory.
 
@@ -129,6 +152,12 @@ def main():
     if image:
         sid = sample_id or os.path.splitext(os.path.basename(image))[0]
         if not mask:
+            # Canonical path: read seg_manifest.json from segmentation output
+            mask = _find_mask_from_manifest(args.input, sid)
+        if not mask:
+            # Fallback: heuristic search (backward compat / manual mask setups)
+            print(f"  Note: no seg_manifest.json found, using heuristic mask search",
+                  file=sys.stderr)
             mask = _find_mask_for_sample(args.input, sid)
         if not mask:
             print(f"ERROR: No mask found for {sid}", file=sys.stderr)

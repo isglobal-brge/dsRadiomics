@@ -90,6 +90,20 @@ def main():
                "n_failed": sum(1 for r in results if r["status"] == "failed"), "bundle": args.bundle}
     with open(os.path.join(args.output, "segmentation_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
+
+    # Write seg_manifest.json
+    seg_manifest = {"provider": "monai", "bundle": args.bundle, "samples": {}}
+    for r in results:
+        sid = r["sample_id"]
+        if r["status"] == "done":
+            mask_path = os.path.join(args.output, f"{sid}_seg.nii.gz")
+            seg_manifest["samples"][sid] = {
+                "sample_id": sid, "primary_mask": mask_path,
+                "mask_files": [mask_path], "status": "done"
+            }
+    with open(os.path.join(args.output, "seg_manifest.json"), "w") as f:
+        json.dump(seg_manifest, f, indent=2)
+
     print(f"  Done: {summary['n_done']}/{summary['n_total']}")
 
 

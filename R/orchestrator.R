@@ -27,19 +27,22 @@ radiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
   if (is.null(image_root) || !dir.exists(image_root))
     stop("Cannot resolve image root for dataset: ", dataset_id, call. = FALSE)
 
-  # Fingerprint all images
-  fp_result <- dsImaging::compute_collection_fingerprints(dataset_id, image_root)
+  # Fingerprint all images (with strong content hash for dedup)
+  fp_result <- dsImaging::compute_collection_fingerprints(dataset_id, image_root,
+    compute_content_hash = TRUE)
 
   # Build processor identity for derivation hashing
   processor <- paste0(segmenter$provider, "_", segmenter$task %||% "default")
 
-  # Collection-level derivation hash (for the whole seg+extract pipeline)
+  # Collection-level hash uses content_hashes (strong) when available
+  hash_source <- if (length(fp_result$content_hashes) > 0)
+    fp_result$content_hashes else fp_result$fingerprints
   collection_hash <- dsImaging::compute_derivation_hash(
     dataset_id = dataset_id,
     processor = processor,
     profile = profile$name,
     bin_width = profile$bin_width,
-    fingerprints = sort(unlist(fp_result$fingerprints))
+    image_hashes = sort(unlist(hash_source))
   )
 
   # Claim or reuse generation
@@ -85,7 +88,8 @@ radiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
       failed = length(failed_ids),
       pending = length(pending_ids),
       pending_ids = pending_ids,
-      fingerprints = fp_result$fingerprints
+      fingerprints = fp_result$fingerprints,
+      content_hashes = fp_result$content_hashes
     ))
   }
 
@@ -106,7 +110,8 @@ radiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     done = length(fp_result$unchanged),
     pending = length(pending_ids),
     pending_ids = pending_ids,
-    fingerprints = fp_result$fingerprints
+    fingerprints = fp_result$fingerprints,
+    content_hashes = fp_result$content_hashes
   )
 }
 
@@ -117,13 +122,16 @@ radiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
 #' @export
 radiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
                                     segmenter_enc, profile_enc,
-                                    dataset_id_enc, fingerprints_enc) {
-  generation_id <- .dsr_decode(generation_id_enc)
-  sample_ids    <- .dsr_decode(sample_ids_enc)
-  segmenter     <- .dsr_decode(segmenter_enc)
-  profile       <- .dsr_decode(profile_enc)
-  dataset_id    <- .dsr_decode(dataset_id_enc)
-  fingerprints  <- .dsr_decode(fingerprints_enc)
+                                    dataset_id_enc, fingerprints_enc,
+                                    content_hashes_enc = NULL) {
+  generation_id  <- .dsr_decode(generation_id_enc)
+  sample_ids     <- .dsr_decode(sample_ids_enc)
+  segmenter      <- .dsr_decode(segmenter_enc)
+  profile        <- .dsr_decode(profile_enc)
+  dataset_id     <- .dsr_decode(dataset_id_enc)
+  fingerprints   <- .dsr_decode(fingerprints_enc)
+  content_hashes <- if (!is.null(content_hashes_enc))
+    .dsr_decode(content_hashes_enc) else list()
 
   if (!requireNamespace("dsJobs", quietly = TRUE))
     stop("dsJobs required", call. = FALSE)
@@ -147,8 +155,10 @@ radiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
     fp <- fingerprints[[sid]]
     if (is.null(fp)) next
 
-    # Per-image derivation hash for cross-user dedup
+    # Per-image derivation hash: prefer content_hash (strong) over fingerprint (fast)
+    ch <- content_hashes[[sid]]
     spec_hash <- dsImaging::compute_image_derivation_hash(
+      content_hash = ch,
       fingerprint = fp,
       processor = processor,
       params = list(profile = profile$name, bin_width = profile$bin_width)
@@ -158,19 +168,17 @@ radiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
     existing <- dsImaging::find_asset_by_hash(dataset_id, spec_hash)
 
     if (!is.null(existing)) {
-      dsImaging::record_item_status(generation_id, sid, "completed",
+      dsImaging::complete_item_atomic(generation_id, sid, "completed",
         artifact_relpath = existing)
-      dsImaging::increment_generation_counter(generation_id, "completed_n")
       submitted[[sid]] <- list(status = "reused", asset_id = existing)
       next
     }
 
     # Resolve image path
-    image_path <- .resolve_sample_image(image_root, sid)
+    image_path <- .resolve_sample_image(image_root, sid, dataset_id = dataset_id)
     if (is.null(image_path)) {
-      dsImaging::record_item_status(generation_id, sid, "failed",
+      dsImaging::complete_item_atomic(generation_id, sid, "failed",
         error = "Image file not found")
-      dsImaging::increment_generation_counter(generation_id, "failed_n")
       submitted[[sid]] <- list(status = "failed", error = "Image not found")
       next
     }
@@ -253,9 +261,8 @@ radiomicsSubmitBatchDS <- function(generation_id_enc, sample_ids_enc,
       result <- dsJobs::jobSubmitDS(spec_enc)
       submitted[[sid]] <- list(status = "submitted", job_id = result$job_id)
     }, error = function(e) {
-      dsImaging::record_item_status(generation_id, sid, "failed",
+      dsImaging::complete_item_atomic(generation_id, sid, "failed",
         error = paste("Submit failed:", conditionMessage(e)))
-      dsImaging::increment_generation_counter(generation_id, "failed_n")
       submitted[[sid]] <<- list(status = "submit_failed",
                                  error = conditionMessage(e))
     })
@@ -287,6 +294,11 @@ radiomicsCollectionStatusDS <- function(generation_id_enc) {
   completed_ids <- items$sample_id[items$status == "completed"]
   failed_ids <- items$sample_id[items$status == "failed"]
   pending_ids <- items$sample_id[items$status == "pending"]
+  claimed_ids <- items$sample_id[items$status == "claimed"]
+  running_ids <- items$sample_id[items$status == "running"]
+
+  # pending + claimed + running = "not yet done"
+  not_done <- length(pending_ids) + length(claimed_ids) + length(running_ids)
 
   list(
     generation_id = generation_id,
@@ -295,8 +307,10 @@ radiomicsCollectionStatusDS <- function(generation_id_enc) {
     completed = length(completed_ids),
     failed = length(failed_ids),
     pending = length(pending_ids),
+    claimed = length(claimed_ids),
+    running = length(running_ids),
     failed_samples = if (length(failed_ids) > 0) failed_ids else NULL,
-    is_done = length(pending_ids) == 0L
+    is_done = not_done == 0L
   )
 }
 
@@ -437,9 +451,8 @@ radiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_enc,
     for (sid in pending_items$sample_id) {
       if (sid %in% tags) {
         err_msg <- failed_jobs$error_message[i] %||% "dsJobs job failed"
-        dsImaging::record_item_status(generation_id, sid, "failed",
+        dsImaging::complete_item_atomic(generation_id, sid, "failed",
           error = err_msg)
-        dsImaging::increment_generation_counter(generation_id, "failed_n")
         break
       }
     }
@@ -517,8 +530,20 @@ radiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_enc,
 }
 
 #' Resolve a single sample's image file path
+#'
+#' Checks sample_manifests first (supports DICOM series, bundles).
+#' Falls back to directory scanning for backward compat.
 #' @keywords internal
-.resolve_sample_image <- function(image_root, sample_id) {
+.resolve_sample_image <- function(image_root, sample_id, dataset_id = NULL) {
+  # 1. Try sample manifest (canonical for multi-file samples)
+  if (!is.null(dataset_id)) {
+    primary <- tryCatch(
+      dsImaging::get_sample_primary_path(dataset_id, sample_id),
+      error = function(e) NULL)
+    if (!is.null(primary) && file.exists(primary)) return(primary)
+  }
+
+  # 2. Fallback: directory scan (single-file samples)
   if (is.null(image_root) || !dir.exists(image_root)) return(NULL)
   files <- list.files(image_root, full.names = TRUE)
   for (f in files) {
