@@ -207,11 +207,11 @@ else
       if [ "${USE_UV}" = true ]; then
         "${UV}" pip install --python "${RADIOMICS_VENV}/bin/python" --no-build-isolation \
           "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git" \
-          SimpleITK pandas pyyaml 2>&1 | tail -3
+          SimpleITK pandas pyyaml pyarrow 2>&1 | tail -3
       else
         "${RADIOMICS_VENV}/bin/pip" install --no-build-isolation \
           "pyradiomics @ git+https://github.com/AIM-Harvard/pyradiomics.git" \
-          SimpleITK pandas pyyaml 2>&1 | tail -3
+          SimpleITK pandas pyyaml pyarrow 2>&1 | tail -3
       fi
       if check_import "${RADIOMICS_VENV}/bin/python" "radiomics" 2>/dev/null; then
         echo "ready" > "${RADIOMICS_VENV}/.dsradiomics_ready"

@@ -226,7 +226,7 @@ def main():
     with open(os.path.join(args.output, "extraction_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 
-    print(f"  Saved: {summary['n_samples']} samples x {summary['n_features']} features ({fmt})")
+    print(f"  Saved: {summary['n_samples']} samples x {summary['n_features']} features (parquet)")
 
 
 if __name__ == "__main__":
