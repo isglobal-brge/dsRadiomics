@@ -94,7 +94,9 @@ radiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     return(list(
       action = "reuse_asset",
       asset_id = gen_result$asset_id,
-      total = total_n, done = total_n, pending = 0L
+      total = dsImaging::safe_metadata_count(total_n),
+      done = dsImaging::safe_metadata_count(total_n),
+      pending = 0L
     ))
   }
 
@@ -111,10 +113,10 @@ radiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
     return(list(
       action = "resume",
       generation_id = generation_id,
-      total = total_n,
-      done = length(done_ids),
-      failed = length(failed_ids),
-      pending = length(pending_ids)
+      total = dsImaging::safe_metadata_count(total_n),
+      done = dsImaging::safe_metadata_count(length(done_ids)),
+      failed = dsImaging::safe_metadata_count(length(failed_ids)),
+      pending = dsImaging::safe_metadata_count(length(pending_ids))
     ))
   }
 
@@ -133,9 +135,9 @@ radiomicsScanCollectionDS <- function(dataset_id_enc, segmenter_enc,
   list(
     action = "run_new",
     generation_id = generation_id,
-    total = total_n,
-    done = length(fp_result$unchanged),
-    pending = length(pending_ids)
+    total = dsImaging::safe_metadata_count(total_n),
+    done = dsImaging::safe_metadata_count(length(fp_result$unchanged)),
+    pending = dsImaging::safe_metadata_count(length(pending_ids))
   )
 }
 
@@ -332,15 +334,16 @@ radiomicsCollectionStatusDS <- function(generation_id_enc) {
   # pending + claimed + running = "not yet done"
   not_done <- length(pending_ids) + length(claimed_ids) + length(running_ids)
 
+  # Apply disclosure control to all counts returned to client
   list(
     generation_id = generation_id,
     state = gen$state,
-    total = as.integer(gen$expected_n %||% nrow(items)),
-    completed = length(completed_ids),
-    failed = length(failed_ids),
-    pending = length(pending_ids),
-    claimed = length(claimed_ids),
-    running = length(running_ids),
+    total = dsImaging::safe_metadata_count(as.integer(gen$expected_n %||% nrow(items))),
+    completed = dsImaging::safe_metadata_count(length(completed_ids)),
+    failed = dsImaging::safe_metadata_count(length(failed_ids)),
+    pending = dsImaging::safe_metadata_count(length(pending_ids)),
+    claimed = dsImaging::safe_metadata_count(length(claimed_ids)),
+    running = dsImaging::safe_metadata_count(length(running_ids)),
     is_done = not_done == 0L
   )
 }
@@ -438,9 +441,9 @@ radiomicsPublishCollectionDS <- function(generation_id_enc, dataset_id_enc,
   list(
     asset_id = asset_id,
     generation_id = generation_id,
-    total = total,
-    completed = n_completed,
-    failed = n_failed,
+    total = dsImaging::safe_metadata_count(total),
+    completed = dsImaging::safe_metadata_count(n_completed),
+    failed = dsImaging::safe_metadata_count(n_failed),
     failed_samples = if (n_failed > 0) failed$sample_id else character(0)
   )
 }
@@ -547,15 +550,16 @@ radiomicsValidateMasksDS <- function(generation_id_enc, dataset_id) {
   total <- nrow(items)
   all_valid <- n_valid == total && n_missing == 0L && n_failed == 0L
 
+  # Apply disclosure control to all counts returned to client
   list(
     valid = all_valid,
     generation_id = generation_id,
     dataset_id = dataset_id,
     segmenter = gen_spec$processor %||% "unknown",
-    total = total,
-    n_valid = n_valid,
-    n_missing = n_missing,
-    n_failed = n_failed,
+    total = dsImaging::safe_metadata_count(total),
+    n_valid = dsImaging::safe_metadata_count(n_valid),
+    n_missing = dsImaging::safe_metadata_count(n_missing),
+    n_failed = dsImaging::safe_metadata_count(n_failed),
     needs_regeneration = length(missing_samples) > 0,
     # mask_paths stays server-side (disclosure: no sample IDs to client)
     # dsFlower reads it server-side via radiomicsGetMaskManifestDS
